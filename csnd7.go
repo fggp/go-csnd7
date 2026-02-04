@@ -8,9 +8,51 @@ package csnd7
 
 #include <csound/csound.h>
 
+void cMessage(CSOUND *csound, const char *msg)
+{
+  csoundMessage(csound, "%s", msg);
+}
+
+void cMessageS(CSOUND *csound, int32_t attr, char *msg)
+{
+  csoundMessageS(csound, attr, "%s", msg);
+}
 */
 import "C"
-import "unsafe"
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+func cbool(flag bool) C.int32_t {
+	if flag {
+		return 1
+	}
+	return 0
+}
+
+func cMYFLT(val MYFLT) C.double {
+	return C.double(val)
+}
+
+func cpMYFLT(pval *MYFLT) *C.double {
+	return (*C.double)(pval)
+}
+
+func cppMYFLT(ppval **MYFLT) **C.double {
+	return (**C.double)(unsafe.Pointer(ppval))
+}
+
+// Error Definitions
+const (
+	CSOUND_SUCCESS        = 0  // Completed successfully.
+	CSOUND_ERROR          = -1 // Unspecified failure.
+	CSOUND_INITIALIZATION = -2 // Failed during initialization.
+	CSOUND_PERFORMANCE    = -3 // Failed during performance.
+	CSOUND_MEMORY         = -4 // Failed to allocate requested memory.
+	CSOUND_SIGNAL         = -5 // Termination requested by SIGINT or SIGTERM.
+)
 
 // Encapsulates an opaque pointer to a Csound instance
 type CSOUND struct {
@@ -30,7 +72,7 @@ type MYFLT float64
 // Return value is zero on success, positive if initialisation was
 // done already, and negative on error.
 func Initialize(flags int) int {
-	return int(C.csoundInitialize(C.int32(flags)))
+	return int(C.csoundInitialize(C.int32_t(flags)))
 }
 
 // Creates an instance of Csound.  Returns an opaque pointer that
@@ -45,9 +87,9 @@ func Create(hostData unsafe.Pointer, opcodeDir string) CSOUND {
 	if opcodeDir == "" {
 		cs = C.csoundCreate(hostData, nil)
 	} else {
-		var cstr *C.char = C.CString(opcodeDir)
-		cs = C.csoundCreate(nil, cstr)
-		C.free(unsafe.Pointer(cstr))
+		copcodeDir := C.CString(opcodeDir)
+		defer C.free(unsafe.Pointer(copcodeDir))
+		cs = C.csoundCreate(nil, copcodeDir)
 	}
 	return CSOUND{cs}
 }
@@ -56,4 +98,299 @@ func Create(hostData unsafe.Pointer, opcodeDir string) CSOUND {
 func (csound *CSOUND) Destroy() {
 	C.csoundDestroy(csound.Cs)
 	csound.Cs = nil
+}
+
+/*
+ * Attributes
+ */
+
+// Returns the version number
+func (csound CSOUND) Version() string {
+	n := int(C.csoundGetVersion())
+	l1, l3 := n/1000, n%1000
+	l2 := l3 / 10
+	l3 %= 10
+	return fmt.Sprintf("%d.%02d.%d", l1, l2, l3)
+}
+
+// Returns the number of audio sample frames per second.
+func (csound CSOUND) Sr() MYFLT {
+	return MYFLT(C.csoundGetSr(csound.Cs))
+}
+
+// Returns the number of control samples per second.
+func (csound CSOUND) Kr() MYFLT {
+	return MYFLT(C.csoundGetKr(csound.Cs))
+}
+
+// Returns the audio vector size in frames (= sr/kr).
+func (csound CSOUND) Ksmps() int {
+	return int(C.csoundGetKsmps(csound.Cs))
+}
+
+/*
+ * Returns the number of audio channels in the Csound instance.
+ * If isInput is false, the value of nchnls is returned,
+ * otherwise nchnls_i.
+ */
+func (csound CSOUND) Channels(isInput bool) int {
+	return int(C.csoundGetChannels(csound.Cs, cbool(isInput)))
+}
+
+/*
+ * Returns the 0dBFS level of the spin/spout buffers.
+ */
+func (csound CSOUND) Get0dbFS() MYFLT {
+	return MYFLT(C.csoundGet0dBFS(csound.Cs))
+}
+
+/*
+ * Returns the A4 frequency reference
+ */
+func (csound CSOUND) A4() MYFLT {
+	return MYFLT(C.csoundGetA4(csound.Cs))
+}
+
+/*
+ * Returns the current performance time in sample frames
+ */
+func (csound CSOUND) CurrentTimeSamples() int {
+	return int(C.csoundGetCurrentTimeSamples(csound.Cs))
+}
+
+/*
+ * Returns the size of MYFLT in bytes.
+ */
+func (csound CSOUND) SizeOfMYFLT() int {
+	return int(C.csoundGetSizeOfMYFLT())
+}
+
+/*
+ * Set csound options (flag). Returns CSOUND_SUCCESS on success.
+ * This needs to be called after Create() and before any code is
+ * compiled. Multiple options are allowed in one string.
+ */
+func (csound CSOUND) SetOption(option string) int {
+	coption := C.CString(option)
+	defer C.free(unsafe.Pointer(coption))
+	return int(C.csoundSetOption(csound.Cs, coption))
+}
+
+/*
+ * Compilation and Performance
+ */
+
+/*
+ * Compiles Csound input files (such as an orchestra and score, or CSD)
+ * as directed by the supplied command-line arguments,
+ * but does not perform them. Returns a non-zero error code on failure.
+ * In this mode, the sequence of calls should be as follows:
+ *
+ *     csound.Compile(args)
+ *     csound.Start()
+ *     for !csound.PerformKsmps() {}
+ *     csound.Reset()
+ */
+func (csound CSOUND) Compile(args []string) int {
+	argc := C.int32_t(len(args))
+	argv := make([]*C.char, argc)
+	for i, arg := range args {
+		argv[i] = C.CString(arg)
+		defer C.free(unsafe.Pointer(argv[i]))
+	}
+	return int(C.csoundCompile(csound.Cs, argc, &argv[0]))
+}
+
+/*
+ * Parse, and compile the given orchestra from an ASCII string,
+ * also evaluating any global space code (i-time only)
+ * in synchronous or asynchronous (async = true) mode.
+ *
+ *     orc := "instr 1 \n a1 = rand(0dbfs/4) \n out(a1) \n"
+ *     csound.CompileOrc(orc, false);
+ */
+func (csound CSOUND) CompileOrc(code string, async bool) int {
+	ccode := C.CString(code)
+	defer C.free(unsafe.Pointer(ccode))
+	return int(C.csoundCompileOrc(csound.Cs, ccode, cbool(async)))
+}
+
+/*
+ * Compiles a Csound input file (CSD, .csd file) or a txt string
+ * containing the CSD code, in synchronous or asynchronous (async = true) mode.
+ * Returns a non-zero error code on failure.
+ *
+ * If csound.Start is called before csound.CompileCSD, the <CsOptions>
+ * element is ignored (but csound.SetOption can be called any number of
+ * times), the <CsScore> element is dispatched as score events (e.g.
+ * as it is done by csoundEventString())
+ *
+ *     csound.SetOption("-an_option")
+ *     csound.SetOption("-another_option")
+ *     csound.Start()
+ *     csound.CompileCSD(csd_filename, 0, false)
+ *     for {
+ *       csound.PerformKsmps()
+ *       // Something to break out of the loop
+ *       // when finished here...
+ *     }
+ *
+ * NB: this function can be called repeatedly during performance to
+ * replace or add new instruments and events.
+ *
+ * But if csound.CompileCsd is called before csound.Start, the <CsOptions>
+ * element is used, the <CsScore> section is pre-processed and dispatched
+ * normally, and performance terminates when the score terminates.
+ *
+ *     csound.CompileCSD(csound, csd_filename, 0, false)
+ *     csound.Start()
+ *     for !csound.PerformKsmps() {
+ *     }
+ *
+ * if mode = 1, csd contains a full CSD code (rather than a filename).
+ * This is convenient when it is desirable to package the csd as part of
+ * an application or a multi-language piece.
+ */
+func (csound CSOUND) CompileCSD(csd string, mode int, async bool) int {
+	csdName := C.CString(csd)
+	defer C.free(unsafe.Pointer(csdName))
+	return int(C.csoundCompileCSD(csound.Cs, csdName, C.int32_t(mode), cbool(async)))
+}
+
+/*
+ * Prepares Csound for performance. Normally called after compiling
+ * a csd file or an orc file, in which case score preprocessing is
+ * performed and performance terminates when the score terminates.
+ *
+ * However, if called before compiling a csd file or an orc file,
+ * score preprocessing is not performed and "i" statements are dispatched
+ * as real-time events, the <CsOptions> tag is ignored, and performance
+ * continues indefinitely or until ended using the API.
+ */
+func (csound CSOUND) Start() int {
+	return int(C.csoundStart(csound.Cs))
+}
+
+/*
+ * Senses input events, and performs one block of
+ * audio output containing ksmps frames. csound.Start() must be called first.
+ * Returns false during performance, and true when performance is finished.
+ * If called until it returns true, will perform an entire score.
+ * Enables external software to control the execution of Csound,
+ * and to synchronize performance with audio input and output.
+ */
+func (csound CSOUND) PerformKsmps() bool {
+	return C.csoundPerformKsmps(csound.Cs) != 0
+}
+
+/*
+ * Resets all internal memory and state in preparation for a new performance.
+ * Enables external software to run successive Csound performances
+ * without reloading Csound.
+ */
+func (csound CSOUND) Reset() {
+	C.csoundReset(csound.Cs)
+}
+
+/*
+ * Audio I/O
+ */
+
+/*
+ * Returns the address of the Csound audio input working buffer (spin).
+ * Enables external software to write audio into Csound before calling
+ * csound.PerformKsmps.
+ */
+func (csound CSOUND) Spin() []MYFLT {
+	buffer := (*MYFLT)(C.csoundGetSpin(csound.Cs))
+	length := csound.Ksmps() * csound.Channels(true)
+	slice := []MYFLT(unsafe.Slice(buffer, length))
+	return slice
+}
+
+/*
+ * Returns the address of the Csound audio output working buffer (spout).
+ * Enables external software to read audio from Csound after calling
+ * csound.PerformKsmps.
+ */
+func (csound CSOUND) Spout() []MYFLT {
+	buffer := (*MYFLT)(C.csoundGetSpout(csound.Cs))
+	length := csound.Ksmps() * csound.Channels(false)
+	slice := []MYFLT(unsafe.Slice(buffer, length))
+	return slice
+}
+
+/*
+ * Csound Messages and Text
+ */
+
+/*
+ * Displays an informational message.
+ */
+func (cs CSOUND) Message(format string, vals ...any) {
+	s := fmt.Sprintf(format, vals...)
+	cstr := C.CString(s)
+	defer C.free(unsafe.Pointer(cstr))
+	C.cMessage(cs.Cs, cstr)
+}
+
+/*
+ * Channels, Control, and Events
+ */
+
+/*
+ * Sets the value of control channel identified by name.
+ */
+func (csound CSOUND) SetControlChannel(name string, val MYFLT) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	C.csoundSetControlChannel(csound.Cs, cname, cMYFLT(val))
+}
+
+/*
+ * Schedule new score or realtime event(s) as a string
+ * Two operation modes are supported:
+ * - Score events: any calls before csound.Start() add the string events to
+ * the score (before pre-processing) (async should be set to false).
+ * - Realtime events: after the engine starts, string events are added to
+ * the realtime event queue.
+ *
+ * Multiple events separated by newlines are possible
+ * and score preprocessing (carry, etc) is applied.
+ * optionally run asynchronously (async = true)
+ */
+func (csound CSOUND) EventString(message string, async bool) {
+	cmsg := C.CString(message)
+	defer C.free(unsafe.Pointer(cmsg))
+	C.csoundEventString(csound.Cs, cmsg, cbool(async))
+}
+
+/*
+ * Tables
+ */
+
+/*
+ * Returns the length of a function table (not including the guard point),
+ * or -1 if the table does not exist.
+ */
+func (csound CSOUND) TableLenght(tableNum int) int {
+	return int(C.csoundTableLength(csound.Cs, C.int32_t(tableNum)))
+}
+
+/*
+ * Returns a slice of table 'tableNum' and the table length
+ * (not including the guard point).
+ * If the table does not exist, the slice is set to nil and
+ * -1 is returned as the table length..
+ * NB: this function and the slice returned are not threadsafe
+ */
+func (csound CSOUND) Table(tableNum int) ([]MYFLT, int) {
+	var tablePtr *MYFLT
+	length := int(C.csoundGetTable(csound.Cs, cppMYFLT(&tablePtr), C.int32_t(tableNum)))
+	if length == -1 {
+		return nil, -1
+	}
+	slice := []MYFLT(unsafe.Slice(tablePtr, length))
+	return slice, length
+
 }

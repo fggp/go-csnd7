@@ -61,6 +61,71 @@ type CSOUND struct {
 
 type MYFLT float64
 
+type CsoundParams struct {
+	Odebug            C.int32_t // debug flag
+	Sfread            C.int32_t // sound input read flag
+	Sfwrite           C.int32_t // sound output write flag (-s)
+	Filetyp           C.int32_t // soundfile type code
+	Inbufsamps        C.int32_t // input buffer size in samples
+	Outbufsamps       C.int32_t // output buffer size in samples
+	Informat          C.int32_t // input soundfile format
+	Outformat         C.int32_t // output soundfile format
+	SndfileSampleSize C.int32_t // sample size
+	Displays          C.int32_t // displays flag
+	Graphsoff         C.int32_t // graphs flag
+	Postscript        C.int32_t // postscript graphs flag
+	Msglevel          C.int32_t // message level (-m)
+	Beatmode          C.int32_t // beat mode
+	OMaxLag           C.int32_t // hardware buffer size (samples)
+	Linein            C.int32_t // linevents flag (-L)
+	RTevents          C.int32_t // realtime events flag (scoreless, -L, -F, -M)
+	Midiin            C.int32_t // midi input flag (-M)
+	FMidiin           C.int32_t // midi file input flag (-F)
+	RMidiin           C.int32_t // remote events flag
+	Ringbell          C.int32_t // ringbell flag
+	Termifend         C.int32_t // terminate on MIDI file input flag (-T)
+	Tewrt_hdr         C.int32_t // rewrite header flag
+	Heartbeat         C.int32_t // heartbeat flag
+	Gen01defer        C.int32_t // GEN01 defer allocation flag
+	CmdTempo          C.double  // tempo value (-t)
+	Sr_override       MYFLT     // sampling rate override (-r)
+	Kr_override       MYFLT     // control rate override (-k)
+	Nchnls_override   C.int32_t // nchnls override
+	Nchnls_i_override C.int32_t // nchnls_i override
+	Infilename        *C.char   // input file name (-i)
+	Outfilename       *C.char   // output file name (-o)
+	Linename          *C.char   // line events source (-L)
+	Midiname          *C.char   // MIDI input device name (-M)
+	FMidiname         *C.char   // MIDI input file name (-F)
+	Midioutname       *C.char   // MIDI output device name (-Q)
+	FMidioutname      *C.char   // MIDI output file name
+	MidiKey           C.int32_t // MIDI key pfield mapping
+	MidiKeyCps        C.int32_t // MIDI key-cps pfield mapping
+	MidiKeyOct        C.int32_t // MIDI key-oct pfield mapping
+	MidiKeyPch        C.int32_t // MIDI key-pch pfield mapping
+	MidiVelocity      C.int32_t // MIDI vel pfield mapping
+	MidiVelocityAmp   C.int32_t // MIDI vel-amp pfield mapping
+	NoDefaultPaths    C.int32_t // default paths flag
+	NumThreads        C.int32_t // multicore number of threads (-j)
+	SyntaxCheckOnly   C.int32_t // syntax check only flag
+	RunUnitTests      C.int32_t // run unit tests flag
+	UseCsdLineCounts  C.int32_t // csd line nums option
+	SampleAccurate    C.int32_t // sample accurate flag
+	Realtime          C.int32_t // realtime priority flag
+	E0dbfs_override   MYFLT     // 0dbfs override
+	Daemon            C.int32_t // daemon mode flag
+	Quality           C.double  // OGG encoding quality
+	Ksmps_override    C.int32_t // ksmps override
+	Fft_lib           C.int32_t // FFT library option
+	Echo              C.int32_t // UDP echo commands flag
+	Limiter           MYFLT     // audio output limiter option
+	Sr_default        MYFLT     // default sampling rate
+	Kr_default        MYFLT     // default control rate
+	Mp3_mode          C.int32_t // MP3 encoding mode
+	Redef             C.int32_t // instr redefinition flag
+	Error_deprecated  C.int32_t // error on deprecated opcodes
+}
+
 /*
  * Instantiation
  */
@@ -166,6 +231,60 @@ func (csound CSOUND) SizeOfMYFLT() int {
 }
 
 /*
+ * Returns host data.
+ */
+func (csound CSOUND) HostData() unsafe.Pointer {
+	return C.csoundGetHostData(csound.Cs)
+}
+
+/*
+ * Sets host data.
+ */
+func (csound CSOUND) SetHostData(hostData unsafe.Pointer) {
+	C.csoundSetHostData(csound.Cs, hostData)
+}
+
+/*
+ * Returns the total error count of the current performance.
+ */
+func (csound CSOUND) ErrCnt() int {
+	return int(C.csoundErrCnt(csound.Cs))
+}
+
+/*
+ * Get the value of environment variable 'name', searching
+ * in this order: local environment of 'csound' (if not NULL), variables
+ * set with csound.SetGlobalEnv(), and system environment variables.
+ * If 'csound' is not NULL, should be called after csound.Compile().
+ * Return value is "" if the variable is not set.
+ */
+func (csound CSOUND) Env(name string) string {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	return C.GoString(C.csoundGetEnv(csound.Cs, cname))
+}
+
+/*
+ * Set the global value of environment variable 'name' to 'value',
+ * or delete variable if 'value' is "".
+ * It is not safe to call this function while any Csound instances
+ * are active.
+ * Returns zero on success.
+ */
+func (csound CSOUND) SetGlobalEnv(name, value string) int {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	var cvalue *C.char
+	if len(value) == 0 {
+		cvalue = nil
+	} else {
+		cvalue = C.CString(value)
+		defer C.free(unsafe.Pointer(cvalue))
+	}
+	return int(C.csoundSetGlobalEnv(cname, cvalue))
+}
+
+/*
  * Set csound options (flag). Returns CSOUND_SUCCESS on success.
  * This needs to be called after Create() and before any code is
  * compiled. Multiple options are allowed in one string.
@@ -174,6 +293,39 @@ func (csound CSOUND) SetOption(option string) int {
 	coption := C.CString(option)
 	defer C.free(unsafe.Pointer(coption))
 	return int(C.csoundSetOption(csound.Cs, coption))
+}
+
+/*
+ * Get the current set of parameters from a CSOUND instance in
+ * a CSOUND_PARAMS structure.
+ */
+func (csound CSOUND) Params() *CsoundParams {
+	p := unsafe.Pointer(C.csoundGetParams(csound.Cs))
+	return (*CsoundParams)(p)
+}
+
+/*
+ * Returns whether Csound is set to print debug messages sent through the
+ * DebugMsg() internal API function. Anything different to 0 means true.
+ */
+func (csound CSOUND) Debug() bool {
+	return C.csoundGetDebug(csound.Cs) != 0
+}
+
+/*
+ * Sets whether Csound prints debug messages from the DebugMsg() internal
+ * API function. Anything different to 0 means true.
+ */
+func (csound CSOUND) SetDebug(debug bool) {
+	C.csoundSetDebug(csound.Cs, cbool(debug))
+}
+
+/*
+ * If val > 0, sets the internal variable holding the system HW sr.
+ * Returns the stored value containing the system HW sr.
+ */
+func (csound CSOUND) SystemSr(val MYFLT) MYFLT {
+	return MYFLT(C.csoundSystemSr(csound.Cs, cMYFLT(val)))
 }
 
 /*

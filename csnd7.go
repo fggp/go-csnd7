@@ -8,6 +8,42 @@ package csnd7
 
 #include <csound/csound.h>
 
+CS_AUDIODEVICE *getAudioDevList(CSOUND *csound, int n, int isOutput)
+{
+  CS_AUDIODEVICE *devs = (CS_AUDIODEVICE *)malloc(n*sizeof(CS_AUDIODEVICE));
+  csoundGetAudioDevList(csound, devs, isOutput);
+  return devs;
+}
+
+void getAudioDev(CS_AUDIODEVICE *devs, int i, char **pname, char **pid, char **pmodule,
+                 int32_t *nchnls, int32_t *flag)
+{
+  CS_AUDIODEVICE dev = devs[i];
+  *pname = dev.device_name;
+  *pid = dev.device_id;
+  *pmodule = dev.rt_module;
+  *nchnls = dev.max_nchnls;
+  *flag = dev.isOutput;
+}
+
+CS_MIDIDEVICE *getMidiDevList(CSOUND *csound, int n, int isOutput)
+{
+  CS_MIDIDEVICE *devs = (CS_MIDIDEVICE *)malloc(n*sizeof(CS_MIDIDEVICE));
+  csoundGetMIDIDevList(csound, devs, isOutput);
+  return devs;
+}
+
+void getMidiDev(CS_MIDIDEVICE *devs, int i, char **pname, char** piname, char **pid,
+                char **pmodule, int32_t *flag)
+{
+  CS_MIDIDEVICE dev = devs[i];
+  *pname = dev.device_name;
+  *piname = dev.interface_name;
+  *pid = dev.device_id;
+  *pmodule = dev.midi_module;
+  *flag = dev.isOutput;
+}
+
 void cMessage(CSOUND *csound, const char *msg)
 {
   csoundMessage(csound, "%s", msg);
@@ -124,6 +160,32 @@ type CsoundParams struct {
 	Mp3_mode          C.int32_t // MP3 encoding mode
 	Redef             C.int32_t // instr redefinition flag
 	Error_deprecated  C.int32_t // error on deprecated opcodes
+}
+
+type CsoundAudioDevice struct {
+	DeviceName string
+	DeviceId   string
+	RtModule   string
+	MaxNchnls  int
+	IsOutput   bool
+}
+
+func (dev CsoundAudioDevice) String() string {
+	return fmt.Sprintf("(%s, %s, %s, %d, %t)", dev.DeviceName, dev.DeviceId,
+		dev.RtModule, dev.MaxNchnls, dev.IsOutput)
+}
+
+type CsoundMidiDevice struct {
+	DeviceName    string
+	InterfaceName string
+	DeviceId      string
+	MidiModule    string
+	IsOutput      bool
+}
+
+func (dev CsoundMidiDevice) String() string {
+	return fmt.Sprintf("(%s, %s, %s, %s, %t)", dev.DeviceName,
+		dev.InterfaceName, dev.DeviceId, dev.MidiModule, dev.IsOutput)
 }
 
 /*
@@ -326,6 +388,94 @@ func (csound CSOUND) SetDebug(debug bool) {
  */
 func (csound CSOUND) SystemSr(val MYFLT) MYFLT {
 	return MYFLT(C.csoundSystemSr(csound.Cs, cMYFLT(val)))
+}
+
+/*
+ * Retrieves a module name and type ("audio" or "midi").
+ * Given a number Modules are added to list as csound loads them.
+ * Returns CSOUND_SUCCESS on success and CSOUND_ERROR if module
+ * number was not found
+ *
+ *      for n :=0; ; n++ {
+ *          name, type, err := csound.Module(n)
+ *          if err != CSOUND_SUCCESS {
+ *              break
+ *          }
+ *          fmt.printf("Module %d:  %s (%s) \n", n, name, type)
+ *
+ */
+func (csound CSOUND) Module(n int) (name, type_ string, err int) {
+	var cname, ctype *C.char
+	cerror := C.csoundGetModule(csound.Cs, C.int32_t(n), &cname, &ctype)
+	name = C.GoString(cname)
+	type_ = C.GoString(ctype)
+	err = int(cerror)
+	return
+}
+
+/*
+ * This function can be called to obtain a list of available
+ * input or output audio devices available (depending on the backend
+ * module used).
+ *
+ *     list := csound.AudioDevList(true)
+ *     for i := range list {
+ *         csound.Message(" %d: %s (%s)\n",
+ *             i, list[i].DeviceId, list[i].DeviceName);
+ *
+ */
+func (csound CSOUND) AudioDevList(isOutput bool) []CsoundAudioDevice {
+	cflag := cbool(isOutput)
+	n := C.csoundGetAudioDevList(csound.Cs, nil, cflag)
+	devs := C.getAudioDevList(csound.Cs, n, cflag)
+	defer C.free(unsafe.Pointer(devs))
+	var list = make([]CsoundAudioDevice, int(n))
+	var name, id, module *C.char
+	var nchnls, isOut C.int32_t
+	for i := range list {
+		C.getAudioDev(devs, C.int(i), &name, &id, &module, &nchnls, &isOut)
+		list[i].DeviceName = C.GoString(name)
+		list[i].DeviceId = C.GoString(id)
+		list[i].RtModule = C.GoString(module)
+		list[i].MaxNchnls = int(nchnls)
+		list[i].IsOutput = (isOut == 1)
+	}
+	return list
+}
+
+// This function can be called to obtain a list of available
+// input or output midi devices. (see also AudioDevList())
+func (csound CSOUND) MidiDevList(isOutput bool) []CsoundMidiDevice {
+	cflag := cbool(isOutput)
+	n := C.csoundGetMIDIDevList(csound.Cs, nil, cflag)
+	devs := C.getMidiDevList(csound.Cs, n, cflag)
+	defer C.free(unsafe.Pointer(devs))
+	var list = make([]CsoundMidiDevice, int(n))
+	var name, iname, id, module *C.char
+	var isOut C.int32_t
+	for i := range list {
+		C.getMidiDev(devs, C.int(i), &name, &iname, &id, &module, &isOut)
+		list[i].DeviceName = C.GoString(name)
+		list[i].InterfaceName = C.GoString(iname)
+		list[i].DeviceId = C.GoString(id)
+		list[i].MidiModule = C.GoString(module)
+		list[i].IsOutput = (isOut == 1)
+	}
+	return list
+}
+
+/*
+ * Returns the Csound message level (from 0 to 231).
+ */
+func (csound CSOUND) MessageLevel() int {
+	return int(C.csoundGetMessageLevel(csound.Cs))
+}
+
+/*
+ * Sets the Csound message level (from 0 to 231).
+ */
+func (csound CSOUND) SetMessageLevel(messageLevel int) {
+	C.csoundSetMessageLevel(csound.Cs, C.int32_t(messageLevel))
 }
 
 /*

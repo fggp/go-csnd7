@@ -878,6 +878,69 @@ func (csound CSOUND) DestroyMessageBuffer() {
 // Channels, Control, and Events
 //////////////////////////////////
 
+// Stores a pointer to the specified channel of the bus in *p,
+// creating the channel first if it does not exist yet.
+// 'type' must be the bitwise OR of exactly one of the following values,
+//
+//	CSOUND_CONTROL_CHANNEL
+//	  control data (one MYFLT value) - (MYFLYT **) pp
+//	CSOUND_AUDIO_CHANNEL
+//	  audio data (csound.GetKsmps() MYFLT values) -(MYFLYT **) pp
+//	CSOUND_STRING_CHANNEL
+//	  string data as a STRINGDAT structure - (STRINGDAT **) pp
+//	 (see csound.GetStringData() and csound.SetStringData())
+//	CSOUND_ARRAY_CHANNEL
+//	  array data as an ARRAYDAT structure - (ARRAYDAT **) pp
+//	 (see csound.ArrayData(), csound.SetArrayData(),
+//	  and csound.InitArrayData())
+//	CSOUND_PVS_CHANNEL
+//	  pvs data as a PVSDATEXT structure - (PVSDAT **) pp
+//	 (see csound.PvsData(), csound.SetPvsData(),
+//	  and csound.InitPvsData())
+//
+// and at least one of these:
+//
+//	CSOUND_INPUT_CHANNEL
+//	CSOUND_OUTPUT_CHANNEL
+//
+// If the channel already exists, it must match the data type
+// (control, string, audio, pvs or array), however, the input/output bits are
+// OR'd with the new value. Note that audio and string channels
+// can only be created after calling csound.Compile(), because the
+// storage size is not known until then.
+// Return value is zero on success, or a negative error code,
+//
+//	CSOUND_MEMORY  there is not enough memory for allocating the channel
+//	CSOUND_ERROR   the specified name or type is invalid
+//
+// or, if a channel with the same name but incompatible type
+// already exists, the type of the existing channel. In the case
+// of any non-zero return value, *p is set to NULL.
+// Note: to find out the type of a channel without actually
+// creating or changing it, set 'type_' to zero, so that the return
+// value will be either the type of the channel, or CSOUND_ERROR
+// if it does not exist.
+//
+// Operations on **p are not thread-safe by default. The host is required
+// to take care of threadsafety by
+//  1. with control channels use __atomic_load() or
+//     __atomic_store() gcc atomic builtins to get or set a channel,
+//     if available.
+//  2. For string and audio channels (and controls if option 1 is not
+//     available), use csound.LockChannel() and csound.UnlockChannel()
+//     when accessing/modifying channel data at **p.
+//
+// See Top/threadsafe.c in the Csound library sources for
+// examples.  Optionally, use the channel get/set functions
+// provided below, which are threadsafe by default.
+func (csound CSOUND) GetChannelPtr(name string, type_ int) (unsafe.Pointer, int) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	var ptr unsafe.Pointer
+	ret := int(C.csoundGetChannelPtr(csound.Cs, &ptr, cname, C.int32_t(type_)))
+	return ptr, ret
+}
+
 // Returns the var type for a channel name or "" if the channel
 // was not found.
 // Currently supported channel var types are "k" (control), "a" (audio),
